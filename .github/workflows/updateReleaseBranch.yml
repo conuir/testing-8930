@@ -1,0 +1,180 @@
+name: Update Release Branches
+
+on:
+  release:
+    types: [released]
+
+jobs:
+  validate-branch-names:
+    permissions:
+      contents: read
+      pull-requests: write
+    name: Update release branches
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tag
+        run: |
+          RELEASE_NAME=${{ github.event.release.name }}
+          TAG_NAME=${{ github.event.release.tag_name }}
+          TARGET_COMMITISH=${{ github.event.release.target_commitish }}
+          SEMVER_TAG_REGEX="^v[0-9]{1,}(\.[0-9]{1,}){2,3}$"
+
+          # Validate release name
+          if [[ ! $RELEASE_NAME =~ $SEMVER_TAG_REGEX ]]; then
+            printf "%s\n" "ERROR: The release name '${RELEASE_NAME}' is not in the correct format, e.g. v10.0.0 or v10.0.0.1"
+            exit 1
+          fi
+
+          # Validate tag name
+          if [[ ! $TAG_NAME =~ $SEMVER_TAG_REGEX ]]; then
+            printf "%s\n" "ERROR: The tag '${TAG_NAME}' is not in the correct format, e.g. v10.0.0 or v10.0.0.1"
+            exit 1
+          fi
+
+          # Validate tag and release name are the same
+          if [[ ! $TAG_NAME == $RELEASE_NAME ]]; then
+            printf "%s\n" "ERROR: The release name should match the tag from which it was created"
+            exit 1
+          fi
+          
+          # Validate tag was created on 'main'
+          if [[ ! $TARGET_COMMITISH == 'main' ]]; then
+            printf "%s\n" "ERROR: The tag must be created on branch 'main'"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: 'main'
+
+      - name: Determine Release branches
+        id: determine-release-branches
+        run: |
+          VERSION_BRANCH_REGEX="\<origin/version-([0-9]{1,}(\.[0-9]{1,}){2,3})$"
+          RELEASE_BRANCHES=(develop)
+          
+          # get remote branches
+          git fetch
+          ALL_BRANCHES=$(git branch -r)
+
+          RELEASE_TAG=${{ github.event.release.tag_name }}
+          RELEASE_VERSION_NUMBER=${RELEASE_TAG#v}
+
+          # filter future release branches
+          for BRANCH in ${ALL_BRANCHES}; do
+            if [[ ! $BRANCH =~ $VERSION_BRANCH_REGEX ]]; then
+              continue
+            fi
+
+            BRANCH_VERSION_NUMBER=${BASH_REMATCH[1]}
+            NOT_CURRENT_VERSION=$([[ "$RELEASE_VERSION_NUMBER" != "$BRANCH_VERSION_NUMBER" ]] && echo "true" || echo "false")
+            IS_FUTURE_VERSION=$([[ $(printf "%s\n%s" "$RELEASE_VERSION_NUMBER" "$BRANCH_VERSION_NUMBER" | sort -V | tail -n1) == "$BRANCH_VERSION_NUMBER" ]] && echo "true" || echo "false" )
+
+            if [[ $NOT_CURRENT_VERSION == "true" && $IS_FUTURE_VERSION == "true" ]]; then
+              RELEASE_BRANCHES+=(${BRANCH#origin/})
+            fi
+          done
+
+          RELEASE_BRANCHES_STR="${RELEASE_BRANCHES[@]}"
+          echo "RELEASE_BRANCHES=$RELEASE_BRANCHES_STR" >> "$GITHUB_OUTPUT"
+      - name: Create pull requests
+        id: create-pull-requests
+        env:
+          RELEASE_BRANCHES: ${{ steps.determine-release-branches.outputs.RELEASE_BRANCHES }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+
+          PULL_REQUEST_NUMBER_REGEX="(https://.*/pull/([0-9]{1,}))"
+
+          FAILED_BRANCHES=()
+          PR_NUMBERS=()
+
+          for BRANCH in ${RELEASE_BRANCHES}; do
+            printf "%s\n" "Creating PR: main -> ${BRANCH}"
+
+            PR_CREATE_OUTPUT=$(gh pr create \
+              --title "Merge main with ${BRANCH}" \
+              --body "Automatically created to merge release ${{ github.event.release.tag_name }} from main into ${BRANCH}" \
+              --head "main" \
+              --base "${BRANCH}")
+
+            if [[ $? -ne 0 ]]; then
+              FAILED_BRANCHES+=("${BRANCH}")
+              printf "%s\n" "ERROR: Failed to create pull request for branch ${BRANCH}"
+              continue
+            fi
+
+            [[ $PR_CREATE_OUTPUT =~ $PULL_REQUEST_NUMBER_REGEX ]]
+
+            printf "%s\n" "Created PR: ${BASH_REMATCH[1]}"
+
+            PR_NUMBERS+=("${BASH_REMATCH[2]}")
+          done
+
+          if [[ ${#PR_NUMBERS[@]} -eq 0 ]]; then
+            printf "%s\n" "ERROR: No PRs created"
+            exit 1
+          fi
+
+          FAILED_BRANCHES_STR="${FAILED_BRANCHES[@]}"
+          echo "FAILED_BRANCHES=$FAILED_BRANCHES_STR" >> "$GITHUB_OUTPUT"
+
+          PR_NUMBERS_STR="${PR_NUMBERS[@]}"
+          echo "PR_NUMBERS=$PR_NUMBERS_STR" >> "$GITHUB_OUTPUT"
+      - name: Approve and Merge pull requests
+        id: approve-and-merge-pull-requests
+        env:
+          FAILED_BRANCHES: ${{ steps.create-pull-requests.outputs.FAILED_BRANCHES }}
+          PR_NUMBERS: ${{ steps.create-pull-requests.outputs.PR_NUMBERS }}
+          GH_TOKEN: ${{ secrets.UPDATE_RELEASE_BRANCH_WORKFLOW_PAT }}
+        run: |
+          set +e
+
+          FAILED_PR_NUMBERS=()
+
+          for PR_NUMBER in ${PR_NUMBERS}; do
+            printf "%s\n" "Approving PR: ${PR_NUMBER}"
+
+            gh pr review "${PR_NUMBER}" --approve
+
+            if [[ $? -ne 0 ]]; then
+              FAILED_PR_NUMBERS+=("${PR_NUMBER}")
+              printf "%s\n" "ERROR: Failed to approve pull request ${PR_NUMBER}"
+              continue
+            fi
+
+            printf "%s\n%s\n" "PR approved" "Merging PR: ${PR_NUMBER}"
+            
+            gh pr merge "${PR_NUMBER}" --merge --admin
+
+            if [[ $? -ne 0 ]]; then
+              FAILED_PR_NUMBERS+=("${PR_NUMBER}")
+              printf "%s\n" "ERROR: Failed to merge pull request ${PR_NUMBER}"
+              continue
+            fi
+
+            printf "%s\n" "PR merged"
+          done
+
+          HAS_FAILED_BRANCHES=$([[ ! -z "${FAILED_BRANCHES}" ]] && echo "true" || echo "false");
+          HAS_FAILED_PRS=$([[ ! -z "${FAILED_PR_NUMBERS}" ]] && echo "true" || echo "false");
+          
+          if [[ $HAS_FAILED_BRANCHES == "true" ]]; then
+            printf "%s\n" "ERROR: Could not create pull requests for branches:"
+            for FAILED_BRANCH in ${FAILED_BRANCHES}; do
+              printf "%s\n" " - ${FAILED_BRANCH}"
+            done
+          fi
+
+          if [[ $HAS_FAILED_PRS == "true" ]]; then
+            printf "%s\n" "ERROR: Could not approve and/or merge pull requests:"
+            for FAILED_PR_NUMBER in ${FAILED_PR_NUMBERS}; do
+              printf "%s\n" " - ${FAILED_PR_NUMBER}"
+            done
+          fi
+
+          # error if couldn't create any branch or approve and merge any PR
+          if [[ $HAS_FAILED_BRANCHES == "true" || $HAS_FAILED_PRS == "true" ]]; then
+            exit 1
+          fi
