@@ -1,0 +1,27 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  validate-branch-names:
+    name: Validate Branch Names
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Branch Names
+        run: |
+          source_branch=$GITHUB_HEAD_REF
+          
+          echo "Validating branch name against naming conventions"
+          echo "Branch name: ${source_branch}"
+          
+          branch_name_convention_regex="(^develop$|^main$|^WEP-[0-9]{3,}(-[A-Za-z0-9]{1,}){1,}$|^version-[0-9]{1,}(\.[0-9]{1,}){2,3}$)"
+
+          if [[ ! $source_branch =~ $branch_name_convention_regex ]]; then
+            echo "${source_branch} is not a valid branch name. See Branch Naming Conventions on Confluence"
+            exit 1
+          fi
+
+          echo "Branch name validation successful"
+          exit 0
