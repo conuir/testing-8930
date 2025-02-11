@@ -96,6 +96,7 @@ jobs:
             PR_CREATE_OUTPUT=$(gh pr create \
               --title "Merge main with ${BRANCH}" \
               --body "Automatically created to merge release ${{ github.event.release.tag_name }} from main into ${BRANCH}" \
+              --label "main to release branch" \
               --head "main" \
               --base "${BRANCH}")
 
