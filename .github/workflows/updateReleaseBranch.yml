@@ -19,6 +19,12 @@ jobs:
           TARGET_COMMITISH=${{ github.event.release.target_commitish }}
           SEMVER_TAG_REGEX="^v[0-9]{1,}(\.[0-9]{1,}){2,3}$"
 
+          # Validate tag was created on 'main'
+          if [[ ! $TARGET_COMMITISH == 'main' ]]; then
+            printf "%s\n" "Release not tagged on 'main' branch. Nothing to do."
+            exit 0
+          fi
+
           # Validate release name
           if [[ ! $RELEASE_NAME =~ $SEMVER_TAG_REGEX ]]; then
             printf "%s\n" "ERROR: The release name '${RELEASE_NAME}' is not in the correct format, e.g. v10.0.0 or v10.0.0.1"
@@ -34,12 +40,6 @@ jobs:
           # Validate tag and release name are the same
           if [[ ! $TAG_NAME == $RELEASE_NAME ]]; then
             printf "%s\n" "ERROR: The release name should match the tag from which it was created"
-            exit 1
-          fi
-          
-          # Validate tag was created on 'main'
-          if [[ ! $TARGET_COMMITISH == 'main' ]]; then
-            printf "%s\n" "ERROR: The tag must be created on branch 'main'"
             exit 1
           fi
 
@@ -162,17 +162,11 @@ jobs:
           HAS_FAILED_PRS=$([[ ! -z "${FAILED_PR_NUMBERS}" ]] && echo "true" || echo "false");
           
           if [[ $HAS_FAILED_BRANCHES == "true" ]]; then
-            printf "%s\n" "ERROR: Could not create pull requests for branches:"
-            for FAILED_BRANCH in ${FAILED_BRANCHES}; do
-              printf "%s\n" " - ${FAILED_BRANCH}"
-            done
+            printf "%s\n%s\n" "ERROR: Could not create pull requests for branches:" "${FAILED_BRANCHES[@]}"
           fi
 
           if [[ $HAS_FAILED_PRS == "true" ]]; then
-            printf "%s\n" "ERROR: Could not approve and/or merge pull requests:"
-            for FAILED_PR_NUMBER in ${FAILED_PR_NUMBERS}; do
-              printf "%s\n" " - ${FAILED_PR_NUMBER}"
-            done
+            printf "%s\n%s\n" "ERROR: Could not approve and/or merge pull requests:" "${FAILED_PR_NUMBERS[@]}"
           fi
 
           # error if couldn't create any branch or approve and merge any PR
