@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate release tag
+        id: validate-release-tag
         run: |
           RELEASE_NAME=${{ github.event.release.name }}
           TAG_NAME=${{ github.event.release.tag_name }}
@@ -22,6 +23,7 @@ jobs:
           # Validate tag was created on 'main'
           if [[ ! $TARGET_COMMITISH == 'main' ]]; then
             printf "%s\n" "Release not tagged on 'main' branch. Nothing to do."
+            echo "TAGGED_MAIN=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -44,11 +46,13 @@ jobs:
           fi
 
       - uses: actions/checkout@v4
+        if: ${{ steps.validate-release-tag.outputs.TAGGED_MAIN != 'false' }}
         with:
           ref: 'main'
 
       - name: Determine Release branches
         id: determine-release-branches
+        if: ${{ steps.validate-release-tag.outputs.TAGGED_MAIN != 'false' }}
         run: |
           VERSION_BRANCH_REGEX="\<origin/version-([0-9]{1,}(\.[0-9]{1,}){2,3})$"
           RELEASE_BRANCHES=(develop)
@@ -79,6 +83,7 @@ jobs:
           echo "RELEASE_BRANCHES=$RELEASE_BRANCHES_STR" >> "$GITHUB_OUTPUT"
       - name: Create pull requests
         id: create-pull-requests
+        if: ${{ steps.validate-release-tag.outputs.TAGGED_MAIN != 'false' }}
         env:
           RELEASE_BRANCHES: ${{ steps.determine-release-branches.outputs.RELEASE_BRANCHES }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -125,6 +130,7 @@ jobs:
           echo "PR_NUMBERS=$PR_NUMBERS_STR" >> "$GITHUB_OUTPUT"
       - name: Approve and Merge pull requests
         id: approve-and-merge-pull-requests
+        if: ${{ steps.validate-release-tag.outputs.TAGGED_MAIN != 'false' }}
         env:
           FAILED_BRANCHES: ${{ steps.create-pull-requests.outputs.FAILED_BRANCHES }}
           PR_NUMBERS: ${{ steps.create-pull-requests.outputs.PR_NUMBERS }}
