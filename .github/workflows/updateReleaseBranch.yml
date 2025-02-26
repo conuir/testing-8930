@@ -5,7 +5,7 @@ on:
     types: [released]
 
 jobs:
-  validate-branch-names:
+  update-release-branches:
     permissions:
       contents: read
       pull-requests: write
@@ -55,17 +55,22 @@ jobs:
         if: ${{ steps.validate-release-tag.outputs.TAGGED_MAIN != 'false' }}
         run: |
           VERSION_BRANCH_REGEX="\<origin/version-([0-9]{1,}(\.[0-9]{1,}){2,3})$"
-          RELEASE_BRANCHES=(develop)
+          DEVELOP_BRANCH_REGEX="\<origin/develop$"
+          RELEASE_BRANCHES=()
           
-          # get remote branches
           git fetch
           ALL_BRANCHES=$(git branch -r)
 
           RELEASE_TAG=${{ github.event.release.tag_name }}
           RELEASE_VERSION_NUMBER=${RELEASE_TAG#v}
 
-          # filter future release branches
           for BRANCH in ${ALL_BRANCHES}; do
+            # develop branch may not exist
+            if [[ $BRANCH =~ $DEVELOP_BRANCH_REGEX ]]; then
+              RELEASE_BRANCHES+=(${BRANCH#origin/})
+              continue
+            fi
+
             if [[ ! $BRANCH =~ $VERSION_BRANCH_REGEX ]]; then
               continue
             fi
@@ -128,8 +133,8 @@ jobs:
 
           PR_NUMBERS_STR="${PR_NUMBERS[@]}"
           echo "PR_NUMBERS=$PR_NUMBERS_STR" >> "$GITHUB_OUTPUT"
-      - name: Approve and Merge pull requests
-        id: approve-and-merge-pull-requests
+      - name: Merge pull requests
+        id: merge-pull-requests
         if: ${{ steps.validate-release-tag.outputs.TAGGED_MAIN != 'false' }}
         env:
           FAILED_BRANCHES: ${{ steps.create-pull-requests.outputs.FAILED_BRANCHES }}
@@ -141,17 +146,7 @@ jobs:
           FAILED_PR_NUMBERS=()
 
           for PR_NUMBER in ${PR_NUMBERS}; do
-            printf "%s\n" "Approving PR: ${PR_NUMBER}"
-
-            gh pr review "${PR_NUMBER}" --approve
-
-            if [[ $? -ne 0 ]]; then
-              FAILED_PR_NUMBERS+=("${PR_NUMBER}")
-              printf "%s\n" "ERROR: Failed to approve pull request ${PR_NUMBER}"
-              continue
-            fi
-
-            printf "%s\n%s\n" "PR approved" "Merging PR: ${PR_NUMBER}"
+            printf "%s\n" "Merging PR: ${PR_NUMBER}"
             
             gh pr merge "${PR_NUMBER}" --merge --admin
 
@@ -172,10 +167,9 @@ jobs:
           fi
 
           if [[ $HAS_FAILED_PRS == "true" ]]; then
-            printf "%s\n%s\n" "ERROR: Could not approve and/or merge pull requests:" "${FAILED_PR_NUMBERS[@]}"
+            printf "%s\n%s\n" "ERROR: Could not merge pull requests:" "${FAILED_PR_NUMBERS[@]}"
           fi
 
-          # error if couldn't create any branch or approve and merge any PR
           if [[ $HAS_FAILED_BRANCHES == "true" || $HAS_FAILED_PRS == "true" ]]; then
             exit 1
           fi
